@@ -6,6 +6,12 @@ const fs = require("fs");
 const http = require("http");
 const https = require("https");
 const path = require("path");
+const {
+  CultCache,
+  SingleFileMessagePackBackingStore,
+  defineDocumentRegistry,
+  defineDocumentType,
+} = require("cultcache-ts");
 
 const repoRoot = path.resolve(__dirname, "..");
 const args = parseArgs(process.argv.slice(2));
@@ -13,8 +19,11 @@ const port = Number(args.port || process.env.STONKS_PORT || 8802);
 const host = args.host || process.env.STONKS_HOST || "0.0.0.0";
 const intervalMs = Number(args.intervalMs || process.env.STONKS_INTERVAL_MS || 15000);
 const stateDir = args.stateDir || path.join(repoRoot, "scratch", "stonks");
+const cultCachePath = args.cultCachePath || process.env.STONKS_CULTCACHE_PATH || path.join(stateDir, "stonks-state.cc");
 const providerId = "stonks.market";
 const clients = new Set();
+const recentRequests = [];
+const pendingCultCacheWrites = new Set();
 
 const equitySymbols = String(args.equities || process.env.STONKS_EQUITIES || "ubi.fr,ea.us,ttwo.us,rblx.us,ntdoy.us,7974.jp,sony.us,msft.us,nvda.us,amd.us,googl.us,meta.us,aapl.us,tsla.us,tsm.us,asml.us,crsr.us,logi.us,se.us")
   .split(",")
@@ -28,8 +37,45 @@ const privateWatch = String(args.privateWatch || process.env.STONKS_PRIVATE_WATC
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const radarSymbols = String(args.radar || process.env.STONKS_RADAR || "u.us,app.us,hood.us,coin.us,pltr.us,crm.us,orcl.us,intc.us,mu.us,adbe.us,team.us,snow.us,net.us,crwd.us,ddog.us,shop.us")
+  .split(",")
+  .map((value) => value.trim().toLowerCase())
+  .filter(Boolean);
 
 fs.mkdirSync(stateDir, { recursive: true });
+
+const passThroughSchema = { parse: (value) => value };
+const requestEventDocument = defineDocumentType({
+  type: "request-event",
+  schemaId: "stonks.request_event.v1",
+  schemaName: "stonks.request_event",
+  schemaVersion: "v1",
+  schema: passThroughSchema,
+  indexes: {
+    direction: "direction",
+    kind: "kind",
+  },
+});
+const marketSnapshotDocument = defineDocumentType({
+  type: "market-snapshot",
+  schemaId: "stonks.market_snapshot.v1",
+  schemaName: "stonks.market_snapshot",
+  schemaVersion: "v1",
+  schema: passThroughSchema,
+  global: true,
+});
+const eveSurfaceDocument = defineDocumentType({
+  type: "eve-surface",
+  schemaId: "gamecult.eve.surface_state.v1",
+  schemaName: "gamecult.eve.surface_state",
+  schemaVersion: "v1",
+  schema: passThroughSchema,
+  global: true,
+});
+const cultCache = CultCache.builder()
+  .withRegistry(defineDocumentRegistry(requestEventDocument, marketSnapshotDocument, eveSurfaceDocument))
+  .withGenericStore(new SingleFileMessagePackBackingStore(cultCachePath))
+  .build();
 
 let version = 0;
 let latestSnapshot = pendingSnapshot("Stonks starting");
@@ -41,6 +87,8 @@ main().catch((error) => {
 });
 
 async function main() {
+  await cultCache.pullAllBackingStores();
+  loadRecentRequestsFromCultCache();
   const server = http.createServer(handleHttp);
   server.on("upgrade", handleUpgrade);
   server.listen(port, host, () => {
@@ -88,6 +136,13 @@ async function marketSnapshot() {
     equities: equities.items,
     crypto: crypto.items,
     privateWatch: privateWatch.map(privateWatchItem),
+    radar: radarSymbolsFor(startedAt).map((symbol) => ({
+      kind: "radar",
+      symbol: symbol.toUpperCase(),
+      status: "candidate-tech-gaming-watch",
+      source: "stonks-radar",
+    })),
+    recentRequests: [...recentRequests],
   };
 }
 
@@ -149,6 +204,8 @@ function buildState(snapshot) {
     ...snapshot.equities.map((item) => quoteNode(item)),
     ...snapshot.crypto.map((item) => quoteNode(item)),
     ...snapshot.privateWatch.map((item) => privateWatchNode(item)),
+    ...snapshot.radar.map((item) => textNode(`radar-${item.symbol}`, `radar ${item.symbol} ${item.status}`)),
+    ...snapshot.recentRequests.slice(-12).map((item, index) => requestNode(item, index)),
   ];
   if (snapshot.equities.length === 0 && snapshot.crypto.length === 0) {
     rows.push(textNode("empty", snapshot.error || "no market rows available"));
@@ -168,7 +225,7 @@ function buildState(snapshot) {
         props: {
           title: "Stonks Market Pulse",
           providerId,
-          text: `Market pulse: ${snapshot.equities.length} equities, ${snapshot.crypto.length} crypto assets, ${snapshot.privateWatch.length} private watch names.`,
+          text: `Market pulse: ${snapshot.equities.length} equities, ${snapshot.crypto.length} crypto assets, ${snapshot.privateWatch.length} private watch names, ${snapshot.recentRequests.length} recent requests.`,
         },
         children: rows,
       },
@@ -186,6 +243,12 @@ function quoteNode(item) {
 
 function privateWatchNode(item) {
   return textNode(`watch-${item.symbol}`, `${item.name} ${item.status}; ${item.movement}`);
+}
+
+function requestNode(item, index) {
+  const detail = item.url ? `${item.method || "GET"} ${item.url}` : item.detail || item.kind;
+  const status = item.statusCode ? ` -> ${item.statusCode}` : item.ok === false ? " -> error" : "";
+  return textNode(`request-${index}`, `${item.direction} ${detail}${status}`);
 }
 
 function textNode(id, text) {
@@ -206,6 +269,8 @@ function pendingSnapshot(error) {
     equities: [],
     crypto: [],
     privateWatch: privateWatch.map(privateWatchItem),
+    radar: [],
+    recentRequests: [...recentRequests],
   };
 }
 
@@ -232,12 +297,15 @@ function privateWatchItem(name) {
 }
 
 function persistSnapshot(snapshot, state) {
-  fs.writeFileSync(path.join(stateDir, "latest-market-state.json"), JSON.stringify(snapshot, null, 2), "utf8");
-  fs.writeFileSync(path.join(stateDir, "latest-surface.json"), JSON.stringify(state, null, 2), "utf8");
+  trackCultCacheWrite("persist snapshot", async () => {
+    await cultCache.putGlobal(marketSnapshotDocument, snapshot);
+    await cultCache.putGlobal(eveSurfaceDocument, state);
+  });
 }
 
 function handleHttp(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  logRequest({ direction: "inbound", kind: "http", method: req.method || "GET", url: url.pathname, remote: req.socket.remoteAddress || "" });
   if (url.pathname === "/health") {
     sendJson(res, 200, {
       ok: true,
@@ -246,9 +314,12 @@ function handleHttp(req, res) {
       clients: clients.size,
       intervalMs,
       stateDir,
+      cultCachePath,
       equities: equitySymbols,
       crypto: cryptoIds,
       privateWatch,
+      radar: radarSymbols,
+      recentRequests: [...recentRequests],
       sources: latestSnapshot.sources,
     });
     return;
@@ -263,8 +334,8 @@ function handleHttp(req, res) {
         version: String(currentState.version),
         endpoint: "/eve/deck",
         capabilities: ["market-data", "equities", "crypto", "cultui-surface"],
-        usesCultMesh: false,
-        transport: "Eve WebSocket + scratch snapshot",
+        usesCultMesh: true,
+        transport: "CultCache .cc + Eve WebSocket projection",
       }],
     });
     return;
@@ -279,6 +350,7 @@ function handleHttp(req, res) {
 }
 
 function handleUpgrade(req, socket) {
+  logRequest({ direction: "inbound", kind: "websocket-upgrade", method: "GET", url: req.url || "/eve/deck", remote: socket.remoteAddress || "" });
   if (!req.url.startsWith("/eve/deck")) {
     socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
     return;
@@ -336,12 +408,15 @@ function sendFrame(socket, opcode, payload) {
 }
 
 function getText(url) {
+  const startedAt = Date.now();
+  logRequest({ direction: "outbound", kind: "fetch", method: "GET", url: redactedUrl(url), startedAt: new Date(startedAt).toISOString() });
   return new Promise((resolve, reject) => {
     const req = https.get(url, { timeout: 8000, headers: { "user-agent": "GameCult-Stonks/0.1" } }, (res) => {
       let data = "";
       res.setEncoding("utf8");
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
+        logRequest({ direction: "outbound", kind: "fetch-complete", method: "GET", url: redactedUrl(url), statusCode: res.statusCode, durationMs: Date.now() - startedAt });
         if (res.statusCode < 200 || res.statusCode >= 300) {
           reject(new Error(`${url} returned ${res.statusCode}`));
           return;
@@ -350,10 +425,72 @@ function getText(url) {
       });
     });
     req.on("timeout", () => {
+      logRequest({ direction: "outbound", kind: "fetch-timeout", method: "GET", url: redactedUrl(url), durationMs: Date.now() - startedAt, ok: false });
       req.destroy(new Error(`${url} timed out`));
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      logRequest({ direction: "outbound", kind: "fetch-error", method: "GET", url: redactedUrl(url), durationMs: Date.now() - startedAt, ok: false, error: error.message });
+      reject(error);
+    });
   });
+}
+
+function logRequest(entry) {
+  const observedAt = new Date().toISOString();
+  const id = `request:${observedAt}:${crypto.randomUUID()}`;
+  const record = {
+    schema: "stonks.request_event.v1",
+    id,
+    observedAt,
+    ...entry,
+  };
+  recentRequests.push(record);
+  while (recentRequests.length > 80) recentRequests.shift();
+  trackCultCacheWrite("persist request event", async () => {
+    await cultCache.put(requestEventDocument, id, record);
+  });
+}
+
+function loadRecentRequestsFromCultCache() {
+  const records = cultCache.getAll(requestEventDocument)
+    .sort((left, right) => String(left.observedAt).localeCompare(String(right.observedAt)))
+    .slice(-80);
+  recentRequests.splice(0, recentRequests.length, ...records);
+}
+
+function trackCultCacheWrite(label, operation) {
+  const write = operation().catch((error) => {
+    console.error(`${label} failed:`, error.message);
+  }).finally(() => {
+    pendingCultCacheWrites.delete(write);
+  });
+  pendingCultCacheWrites.add(write);
+}
+
+function redactedUrl(value) {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return String(value).slice(0, 180);
+  }
+}
+
+function radarSymbolsFor(date) {
+  if (radarSymbols.length === 0) return [];
+  const seed = Math.floor(date.getTime() / 60000);
+  return [...radarSymbols]
+    .sort((a, b) => hashString(`${a}:${seed}`) - hashString(`${b}:${seed}`))
+    .slice(0, Math.min(6, radarSymbols.length));
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function csvLine(line, header) {

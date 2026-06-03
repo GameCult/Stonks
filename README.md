@@ -2,9 +2,9 @@
 
 Stonks publishes market-data pulse into the GameCult CultMesh Verse.
 
-It polls public equity/ETF and crypto endpoints, normalizes the result, writes a
-local scratch snapshot, and exposes a provider-owned Eve/CultUI surface for
-Odin and renderers such as Nightwing.
+It polls public equity/ETF and crypto endpoints, normalizes the result into
+CultCache state, and exposes a provider-owned Eve/CultUI surface for Odin and
+renderers such as Nightwing.
 
 ## Current Body
 
@@ -13,7 +13,9 @@ Odin and renderers such as Nightwing.
 - Provider manifest: `http://127.0.0.1:8802/eve/deck/providers`
 - Health: `http://127.0.0.1:8802/health`
 - Snapshot: `http://127.0.0.1:8802/market/state`
-- Scratch state: `scratch/stonks/`
+- CultCache state: `scratch/stonks/stonks-state.cc`
+- Request events: persisted as keyed `stonks.request_event.v1` CultCache
+  documents and projected into the surface marquee.
 - Default focus: gaming and tech public names such as Ubisoft, EA, Take-Two,
   Roblox, Nintendo, Sony, Microsoft, NVIDIA, AMD, Google, Meta, Apple, TSMC,
   Tesla, ASML, Corsair, Logitech, and Sea.
