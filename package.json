@@ -1,0 +1,16 @@
+{
+  "name": "@gamecult/stonks",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Market data daemon that publishes a provider-owned Eve/CultMesh surface for Odin.",
+  "type": "commonjs",
+  "scripts": {
+    "check": "node --check src/stonks-daemon.cjs",
+    "start": "node src/stonks-daemon.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
+
