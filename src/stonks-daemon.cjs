@@ -197,19 +197,31 @@ async function fetchCrypto() {
 
 function buildState(snapshot) {
   version++;
+  const recent = snapshot.recentRequests.slice(-12);
+  const outbound = recent.filter((item) => item.direction === "outbound");
+  const failed = recent.filter((item) => item.ok === false || item.kind === "fetch-error" || item.kind === "fetch-timeout");
   const rows = [
-    textNode("updated", `updated ${snapshot.updatedAt}`),
-    textNode("source-equities", `equities ${snapshot.sources.equities.ok ? "ok" : "error"} via ${snapshot.sources.equities.name}`),
-    textNode("source-crypto", `crypto ${snapshot.sources.crypto.ok ? "ok" : "error"} via ${snapshot.sources.crypto.name}`),
-    ...snapshot.equities.map((item) => quoteNode(item)),
-    ...snapshot.crypto.map((item) => quoteNode(item)),
-    ...snapshot.privateWatch.map((item) => privateWatchNode(item)),
-    ...snapshot.radar.map((item) => textNode(`radar-${item.symbol}`, `radar ${item.symbol} ${item.status}`)),
-    ...snapshot.recentRequests.slice(-12).map((item, index) => requestNode(item, index)),
-  ];
-  if (snapshot.equities.length === 0 && snapshot.crypto.length === 0) {
-    rows.push(textNode("empty", snapshot.error || "no market rows available"));
-  }
+    pane("sources", "Source Status", [
+      metricNode("updated", "updated", ageLabel(snapshot.updatedAt), "ok"),
+      metricNode("equities-source", "equities", snapshot.sources.equities.ok ? "ok" : "error", snapshot.sources.equities.ok ? "ok" : "warn"),
+      metricNode("crypto-source", "crypto", snapshot.sources.crypto.ok ? "ok" : "error", snapshot.sources.crypto.ok ? "ok" : "warn"),
+      metricNode("duration", "poll", `${snapshot.durationMs}ms`, snapshot.durationMs > 7000 ? "warn" : "ok"),
+      snapshot.sources.equities.error ? textNode("equities-error", `equities error: ${errorSummary(snapshot.sources.equities.error)}`) : null,
+      snapshot.sources.crypto.error ? textNode("crypto-error", `crypto error: ${errorSummary(snapshot.sources.crypto.error)}`) : null,
+    ]),
+    pane("pull-volume", "Pull Volume", [
+      metricNode("equity-rows", "Stooq rows", `${snapshot.equities.length}/${equitySymbols.length}`, snapshot.equities.length ? "ok" : "warn"),
+      metricNode("crypto-rows", "CoinGecko rows", `${snapshot.crypto.length}/${cryptoIds.length}`, snapshot.crypto.length ? "ok" : "warn"),
+      metricNode("radar-count", "radar names", String(snapshot.radar.length), "ok"),
+      metricNode("private-watch-count", "private watch", String(snapshot.privateWatch.length), "ok"),
+    ]),
+    pane("request-health", "Request Health", [
+      metricNode("request-total", "recent", String(recent.length), "ok"),
+      metricNode("request-outbound", "outbound", String(outbound.length), outbound.length ? "ok" : "warn"),
+      metricNode("request-failed", "failed", String(failed.length), failed.length ? "warn" : "ok"),
+      textNode("request-note", "request events are persisted in CultCache; dashboard shows health summary only"),
+    ]),
+  ].filter(Boolean);
 
   return {
     schema: "gamecult.eve.surface_state.v1",
@@ -225,7 +237,18 @@ function buildState(snapshot) {
         props: {
           title: "Stonks Market Pulse",
           providerId,
+          overview: { visible: true, signal: "live-ops" },
           text: `Market pulse: ${snapshot.equities.length} equities, ${snapshot.crypto.length} crypto assets, ${snapshot.privateWatch.length} private watch names, ${snapshot.recentRequests.length} recent requests.`,
+          marqueeText: marketTape(snapshot),
+          layout: {
+            density: "dense",
+            layoutStrategy: "nested-dense-signal",
+            preferredWidth: 108,
+            preferredHeight: 36,
+            minWidth: 56,
+            minHeight: 14,
+            priority: -20,
+          },
         },
         children: rows,
       },
@@ -233,22 +256,40 @@ function buildState(snapshot) {
   };
 }
 
-function quoteNode(item) {
+function marketTape(snapshot) {
+  const quotes = [...snapshot.crypto, ...snapshot.equities]
+    .slice(0, 16)
+    .map((item) => quoteText(item));
+  const warnings = [
+    snapshot.sources.equities.ok ? "" : "EQUITIES SOURCE ERROR",
+    snapshot.sources.crypto.ok ? "" : "CRYPTO SOURCE ERROR",
+  ].filter(Boolean);
+  return [...quotes, ...warnings].filter(Boolean).join(" / ");
+}
+
+function quoteText(item) {
   const price = item.price == null ? "N/D" : `$${formatNumber(item.price)}`;
   const change = item.change24h == null ? "" : ` ${item.change24h >= 0 ? "+" : ""}${item.change24h.toFixed(2)}%`;
   const volume = item.volume24h ?? item.volume;
   const volumeText = volume == null ? "" : ` vol ${formatCompact(volume)}`;
-  return textNode(`quote-${item.kind}-${item.symbol}`, `${item.symbol} ${price}${change}${volumeText}`);
+  return `${item.symbol} ${price}${change}${volumeText}`;
 }
 
-function privateWatchNode(item) {
-  return textNode(`watch-${item.symbol}`, `${item.name} ${item.status}; ${item.movement}`);
+function pane(id, title, children) {
+  return {
+    id: `pane-${id}`,
+    kind: "pane",
+    props: { title },
+    children: children.filter(Boolean),
+  };
 }
 
-function requestNode(item, index) {
-  const detail = item.url ? `${item.method || "GET"} ${item.url}` : item.detail || item.kind;
-  const status = item.statusCode ? ` -> ${item.statusCode}` : item.ok === false ? " -> error" : "";
-  return textNode(`request-${index}`, `${item.direction} ${detail}${status}`);
+function metricNode(id, label, value, tone = "default") {
+  return {
+    id,
+    kind: "metric",
+    props: { title: label, label, value, text: `${label}: ${value}`, tone },
+  };
 }
 
 function textNode(id, text) {
@@ -517,6 +558,22 @@ function formatCompact(value) {
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return String(Math.round(value));
+}
+
+function ageLabel(iso) {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "now";
+  if (ms < 1000) return "now";
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3600000) return `${Math.round(ms / 60000)}m`;
+  return `${Math.round(ms / 3600000)}h`;
+}
+
+function errorSummary(error) {
+  const value = String(error || "").trim();
+  if (/timed out/i.test(value)) return "timed out";
+  if (/returned\s+\d+/i.test(value)) return value.match(/returned\s+\d+/i)?.[0] || value;
+  return value.replace(/https?:\/\/\S+/g, "endpoint").slice(0, 80);
 }
 
 function parseArgs(argv) {
