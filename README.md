@@ -15,7 +15,8 @@ renderers such as Nightwing.
 - Snapshot: `http://127.0.0.1:8802/market/state`
 - CultCache state: `scratch/stonks/stonks-state.cc`
 - Request events: persisted as keyed `stonks.request_event.v1` CultCache
-  documents and projected into the surface marquee.
+  documents and summarized in the Eve dashboard. Raw request ledgers are not
+  shown as dashboard truth.
 - Default focus: gaming and tech public names such as Ubisoft, EA, Take-Two,
   Roblox, Nintendo, Sony, Microsoft, NVIDIA, AMD, Google, Meta, Apple, TSMC,
   Tesla, ASML, Corsair, Logitech, and Sea.
@@ -33,8 +34,13 @@ renderers such as Nightwing.
 
 ## Data Sources
 
-- Equities/ETFs: Stooq CSV quote endpoint.
+- Equities/ETFs: Finnhub quote endpoint. Set `FINNHUB_API_KEY` or
+  `STONKS_FINNHUB_TOKEN`; the daemon defaults to 48 quote calls/minute so it
+  stays below the free-plan 60 calls/minute ceiling.
 - Crypto: CoinGecko simple price endpoint.
+- Mention radar: Hacker News Algolia search, IGN RSS, and Eurogamer RSS. These
+  feeds steer which configured symbols Finnhub samples first; they do not own
+  market state.
 
 The daemon is for operator visibility and ambient market context. It is not
 financial advice and does not place trades.
@@ -42,7 +48,18 @@ financial advice and does not place trades.
 Configure defaults with:
 
 ```powershell
+$env:FINNHUB_API_KEY="..."
+$env:STONKS_EQUITY_CALLS_PER_MINUTE="48"
+$env:STONKS_MENTION_REFRESH_MS="600000"
 $env:STONKS_EQUITIES="ubi.fr,ea.us,ttwo.us,rblx.us,ntdoy.us,nvda.us,amd.us,tsla.us"
 $env:STONKS_CRYPTO="bitcoin,ethereum,solana,dogecoin"
 $env:STONKS_PRIVATE_WATCH="Musk Complex"
 ```
+
+You can also put the Finnhub token in `finnhub-oauth.txt` at the repo root or
+pass `--finnhubTokenFile`/`STONKS_FINNHUB_TOKEN_FILE`.
+
+At the default 15 second poll interval and 48 calls/minute budget, Stonks pulls
+up to 12 Finnhub equity quotes per refresh. It prioritizes recently mentioned
+watch symbols, uncached symbols, and then a round-robin pass across the
+configured watchlist.

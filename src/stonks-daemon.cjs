@@ -20,12 +20,16 @@ const host = args.host || process.env.STONKS_HOST || "0.0.0.0";
 const intervalMs = Number(args.intervalMs || process.env.STONKS_INTERVAL_MS || 15000);
 const stateDir = args.stateDir || path.join(repoRoot, "scratch", "stonks");
 const cultCachePath = args.cultCachePath || process.env.STONKS_CULTCACHE_PATH || path.join(stateDir, "stonks-state.cc");
+const finnhubTokenFile = args.finnhubTokenFile || process.env.STONKS_FINNHUB_TOKEN_FILE || path.join(repoRoot, "finnhub-oauth.txt");
+const finnhubToken = String(args.finnhubToken || process.env.FINNHUB_API_KEY || process.env.STONKS_FINNHUB_TOKEN || readSecretFile(finnhubTokenFile)).trim();
+const equityCallsPerMinute = clampNumber(args.equityCallsPerMinute || process.env.STONKS_EQUITY_CALLS_PER_MINUTE || 48, 1, 60);
+const mentionRefreshMs = clampNumber(args.mentionRefreshMs || process.env.STONKS_MENTION_REFRESH_MS || 600000, 60000, 3600000);
 const providerId = "stonks.market";
 const clients = new Set();
 const recentRequests = [];
 const pendingCultCacheWrites = new Set();
 
-const equitySymbols = String(args.equities || process.env.STONKS_EQUITIES || "ubi.fr,ea.us,ttwo.us,rblx.us,ntdoy.us,7974.jp,sony.us,msft.us,nvda.us,amd.us,googl.us,meta.us,aapl.us,tsla.us,tsm.us,asml.us,crsr.us,logi.us,se.us")
+const equitySymbols = String(args.equities || process.env.STONKS_EQUITIES || "ubi.fr,ea.us,ttwo.us,rblx.us,ntdoy.us,sony.us,msft.us,nvda.us,amd.us,googl.us,meta.us,aapl.us,tsla.us,tsm.us,asml.us,crsr.us,logi.us,se.us")
   .split(",")
   .map((value) => value.trim().toLowerCase())
   .filter(Boolean);
@@ -41,6 +45,94 @@ const radarSymbols = String(args.radar || process.env.STONKS_RADAR || "u.us,app.
   .split(",")
   .map((value) => value.trim().toLowerCase())
   .filter(Boolean);
+const finnhubSymbolMap = {
+  "ubi.fr": "UBSFY",
+  "ea.us": "EA",
+  "ttwo.us": "TTWO",
+  "rblx.us": "RBLX",
+  "ntdoy.us": "NTDOY",
+  "7974.jp": "NTDOY",
+  "sony.us": "SONY",
+  "msft.us": "MSFT",
+  "nvda.us": "NVDA",
+  "amd.us": "AMD",
+  "googl.us": "GOOGL",
+  "meta.us": "META",
+  "aapl.us": "AAPL",
+  "tsla.us": "TSLA",
+  "tsm.us": "TSM",
+  "asml.us": "ASML",
+  "crsr.us": "CRSR",
+  "logi.us": "LOGI",
+  "se.us": "SE",
+  "u.us": "U",
+  "app.us": "APP",
+  "hood.us": "HOOD",
+  "coin.us": "COIN",
+  "pltr.us": "PLTR",
+  "crm.us": "CRM",
+  "orcl.us": "ORCL",
+  "intc.us": "INTC",
+  "mu.us": "MU",
+  "adbe.us": "ADBE",
+  "team.us": "TEAM",
+  "snow.us": "SNOW",
+  "net.us": "NET",
+  "crwd.us": "CRWD",
+  "ddog.us": "DDOG",
+  "shop.us": "SHOP",
+};
+const mentionTargets = [
+  { symbol: "ubi.fr", terms: ["ubisoft", "assassin's creed", "assassins creed", "rainbow six", "far cry"] },
+  { symbol: "ea.us", terms: ["electronic arts", " ea ", "battlefield", "the sims", "apex legends"] },
+  { symbol: "ttwo.us", terms: ["take-two", "take two", "rockstar", "gta", "grand theft auto", "2k games"] },
+  { symbol: "rblx.us", terms: ["roblox"] },
+  { symbol: "ntdoy.us", terms: ["nintendo", "switch 2", "zelda", "mario", "pokemon"] },
+  { symbol: "7974.jp", terms: ["nintendo", "switch 2", "zelda", "mario", "pokemon"] },
+  { symbol: "sony.us", terms: ["sony", "playstation", "ps5", "bungie"] },
+  { symbol: "msft.us", terms: ["microsoft", "xbox", "activision", "blizzard", "bethesda", "openai"] },
+  { symbol: "nvda.us", terms: ["nvidia", "geforce", "cuda", "gpu", "ai chip"] },
+  { symbol: "amd.us", terms: ["amd", "radeon", "ryzen", "epyc"] },
+  { symbol: "googl.us", terms: ["google", "alphabet", "android", "youtube", "gemini"] },
+  { symbol: "meta.us", terms: ["meta", "facebook", "instagram", "quest", "llama"] },
+  { symbol: "aapl.us", terms: ["apple", "iphone", "ipad", "vision pro", "mac"] },
+  { symbol: "tsla.us", terms: ["tesla", "elon", "musk", "spacex", "xai", "neuralink", "boring company"] },
+  { symbol: "tsm.us", terms: ["tsmc", "taiwan semiconductor"] },
+  { symbol: "asml.us", terms: ["asml", "euv"] },
+  { symbol: "crsr.us", terms: ["corsair", "elgato"] },
+  { symbol: "logi.us", terms: ["logitech"] },
+  { symbol: "se.us", terms: ["garena", "sea limited"] },
+  { symbol: "u.us", terms: ["unity", "unity engine"] },
+  { symbol: "app.us", terms: ["applovin"] },
+  { symbol: "hood.us", terms: ["robinhood"] },
+  { symbol: "coin.us", terms: ["coinbase"] },
+  { symbol: "pltr.us", terms: ["palantir"] },
+];
+const equityCache = new Map();
+const unsupportedEquitySymbols = new Set();
+const mentionSources = [
+  {
+    id: "hacker-news",
+    label: "HN",
+    url: "https://hn.algolia.com/api/v1/search_by_date?tags=story&hitsPerPage=50",
+    kind: "hn-json",
+  },
+  {
+    id: "ign",
+    label: "IGN",
+    url: "https://feeds.feedburner.com/ign/games-all",
+    kind: "rss",
+  },
+  {
+    id: "eurogamer",
+    label: "Eurogamer",
+    url: "https://www.eurogamer.net/feed",
+    kind: "rss",
+  },
+];
+let equityCursor = 0;
+let nextMentionScanAt = 0;
+let latestMentionScan = emptyMentionScan("not scanned yet");
 
 fs.mkdirSync(stateDir, { recursive: true });
 
@@ -110,8 +202,9 @@ async function refresh() {
 
 async function marketSnapshot() {
   const startedAt = new Date();
+  const mentions = await refreshMentionsIfDue(startedAt).catch((error) => mentionScanError(error));
   const [equities, crypto] = await Promise.all([
-    fetchEquities().catch((error) => ({ ok: false, error: error.message, items: [] })),
+    fetchEquities(mentions.mentionedSymbols).catch((error) => ({ ok: false, error: error.message, items: cachedEquities() })),
     fetchCrypto().catch((error) => ({ ok: false, error: error.message, items: [] })),
   ]);
   return {
@@ -121,10 +214,17 @@ async function marketSnapshot() {
     durationMs: Date.now() - startedAt.getTime(),
     sources: {
       equities: {
-        name: "Stooq",
-        url: "https://stooq.com/q/l/",
+        name: "Finnhub",
+        url: "https://finnhub.io/docs/api/quote",
         ok: equities.ok,
         error: equities.error || null,
+        configured: equitySymbols.length,
+        cached: equities.items.length,
+        sampled: equities.sampled || [],
+        callsThisRefresh: equities.callsThisRefresh || 0,
+        budgetPerMinute: equityCallsPerMinute,
+        tokenConfigured: Boolean(finnhubToken),
+        unsupported: [...unsupportedEquitySymbols],
       },
       crypto: {
         name: "CoinGecko",
@@ -135,8 +235,9 @@ async function marketSnapshot() {
     },
     equities: equities.items,
     crypto: crypto.items,
+    mentions,
     privateWatch: privateWatch.map(privateWatchItem),
-    radar: radarSymbolsFor(startedAt).map((symbol) => ({
+    radar: radarSymbolsFor(startedAt, mentions.mentionedSymbols).map((symbol) => ({
       kind: "radar",
       symbol: symbol.toUpperCase(),
       status: "candidate-tech-gaming-watch",
@@ -146,31 +247,221 @@ async function marketSnapshot() {
   };
 }
 
-async function fetchEquities() {
-  if (equitySymbols.length === 0) return { ok: true, items: [] };
-  const rows = await Promise.all(equitySymbols.map(async (symbol) => {
-    const params = new URLSearchParams({ s: symbol, f: "sd2t2ohlcv", h: "", e: "csv" });
-    const text = await getText(`https://stooq.com/q/l/?${params}`);
-    const lines = text.trim().split(/\r?\n/);
-    const header = lines.shift()?.split(",") || [];
-    return lines.map((line) => csvLine(line, header));
-  }));
-  const items = rows
-    .flat()
-    .filter((row) => row.Symbol && row.Close && row.Close !== "N/D")
-    .map((row) => ({
-      kind: "equity",
-      symbol: row.Symbol.toUpperCase(),
-      price: numberOrNull(row.Close),
-      open: numberOrNull(row.Open),
-      high: numberOrNull(row.High),
-      low: numberOrNull(row.Low),
-      volume: numberOrNull(row.Volume),
-      date: row.Date,
-      time: row.Time,
-      source: "stooq",
-    }));
-  return { ok: true, items };
+async function fetchEquities(mentionedSymbols = []) {
+  if (equitySymbols.length === 0) return { ok: true, items: [], sampled: [], callsThisRefresh: 0 };
+  if (!finnhubToken) {
+    return {
+      ok: false,
+      error: "FINNHUB_API_KEY or STONKS_FINNHUB_TOKEN missing",
+      items: cachedEquities(),
+      sampled: [],
+      callsThisRefresh: 0,
+    };
+  }
+
+  const availableSymbols = equitySymbols.filter((symbol) => !unsupportedEquitySymbols.has(symbol));
+  const callsThisRefresh = Math.max(1, Math.min(
+    availableSymbols.length,
+    Math.floor((equityCallsPerMinute * intervalMs) / 60000),
+  ));
+  if (availableSymbols.length === 0) {
+    return {
+      ok: equityCache.size > 0,
+      error: "all configured Finnhub symbols are unsupported or unavailable",
+      items: cachedEquities(),
+      sampled: [],
+      callsThisRefresh: 0,
+    };
+  }
+  const sampled = selectEquitySample(mentionedSymbols, callsThisRefresh);
+  const results = await Promise.allSettled(sampled.map((symbol) => fetchFinnhubQuote(symbol)));
+  const errors = [];
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) {
+      equityCache.set(result.value.configuredSymbol, result.value);
+    } else {
+      if (result.reason?.statusCode === 403 && result.reason?.configuredSymbol) {
+        unsupportedEquitySymbols.add(result.reason.configuredSymbol);
+      }
+      errors.push(result.reason?.message || "quote failed");
+    }
+  }
+
+  return {
+    ok: errors.length === 0 || equityCache.size > 0,
+    error: errors.length ? errors.slice(0, 2).join("; ") : null,
+    items: cachedEquities(),
+    sampled,
+    callsThisRefresh: sampled.length,
+  };
+}
+
+async function fetchFinnhubQuote(configuredSymbol) {
+  const finnhubSymbol = toFinnhubSymbol(configuredSymbol);
+  const params = new URLSearchParams({ symbol: finnhubSymbol, token: finnhubToken });
+  let row;
+  try {
+    row = JSON.parse(await getText(`https://finnhub.io/api/v1/quote?${params}`));
+  } catch (error) {
+    error.configuredSymbol = configuredSymbol;
+    throw error;
+  }
+  if (!row || row.c === 0 || row.c == null) {
+    throw new Error(`${finnhubSymbol} returned no quote`);
+  }
+  return {
+    kind: "equity",
+    symbol: finnhubSymbol,
+    configuredSymbol,
+    price: numberOrNull(row.c),
+    change: numberOrNull(row.d),
+    change24h: numberOrNull(row.dp),
+    open: numberOrNull(row.o),
+    high: numberOrNull(row.h),
+    low: numberOrNull(row.l),
+    previousClose: numberOrNull(row.pc),
+    quoteTime: row.t ? new Date(row.t * 1000).toISOString() : null,
+    pulledAt: new Date().toISOString(),
+    source: "finnhub",
+  };
+}
+
+function selectEquitySample(mentionedSymbols, count) {
+  const configured = new Set(equitySymbols.filter((symbol) => !unsupportedEquitySymbols.has(symbol)));
+  const availableSymbols = equitySymbols.filter((symbol) => configured.has(symbol));
+  const prioritized = unique([
+    ...mentionedSymbols.filter((symbol) => configured.has(symbol)),
+    ...availableSymbols
+      .filter((symbol) => !equityCache.has(symbol))
+      .sort((left, right) => cacheAgeMs(right) - cacheAgeMs(left)),
+  ]);
+  const selected = [];
+  for (const symbol of prioritized) {
+    if (selected.length >= count) break;
+    if (!selected.includes(symbol)) selected.push(symbol);
+  }
+  while (selected.length < count && availableSymbols.length > 0) {
+    const symbol = availableSymbols[equityCursor % availableSymbols.length];
+    equityCursor = (equityCursor + 1) % Math.max(1, availableSymbols.length);
+    if (!selected.includes(symbol)) selected.push(symbol);
+    if (selected.length >= availableSymbols.length) break;
+  }
+  return selected;
+}
+
+function cachedEquities() {
+  return [...equityCache.values()]
+    .sort((left, right) => String(left.symbol).localeCompare(String(right.symbol)));
+}
+
+function cacheAgeMs(symbol) {
+  const item = equityCache.get(symbol);
+  if (!item?.pulledAt) return Number.POSITIVE_INFINITY;
+  const age = Date.now() - Date.parse(item.pulledAt);
+  return Number.isFinite(age) ? age : Number.POSITIVE_INFINITY;
+}
+
+function toFinnhubSymbol(configuredSymbol) {
+  const key = String(configuredSymbol).toLowerCase();
+  if (finnhubSymbolMap[key]) return finnhubSymbolMap[key];
+  return key.replace(/\.us$/, "").toUpperCase();
+}
+
+async function refreshMentionsIfDue(now = new Date()) {
+  if (now.getTime() < nextMentionScanAt) return latestMentionScan;
+  nextMentionScanAt = now.getTime() + mentionRefreshMs;
+  const sources = await Promise.all(mentionSources.map(scanMentionSource));
+  const texts = sources.flatMap((source) => source.texts || []);
+  const matched = matchMentionSymbols(texts);
+  latestMentionScan = {
+    schema: "stonks.mention_scan.v1",
+    updatedAt: new Date().toISOString(),
+    ok: sources.some((source) => source.ok),
+    sources: sources.map(({ id, label, ok, count, error }) => ({ id, label, ok, count, error: error || null })),
+    mentionedSymbols: matched,
+    scannedItems: texts.length,
+    refreshMs: mentionRefreshMs,
+    error: sources.every((source) => !source.ok) ? sources.map((source) => source.error).filter(Boolean).join("; ") : null,
+  };
+  return latestMentionScan;
+}
+
+async function scanMentionSource(source) {
+  try {
+    const text = await getText(source.url);
+    const texts = source.kind === "hn-json" ? parseHnTitles(text) : parseRssTexts(text);
+    return { id: source.id, label: source.label, ok: true, count: texts.length, texts };
+  } catch (error) {
+    return { id: source.id, label: source.label, ok: false, count: 0, texts: [], error: error.message };
+  }
+}
+
+function parseHnTitles(text) {
+  const json = JSON.parse(text);
+  return (json.hits || [])
+    .map((item) => [item.title, item.story_title, item.url].filter(Boolean).join(" "))
+    .filter(Boolean);
+}
+
+function parseRssTexts(text) {
+  const items = text.match(/<item[\s\S]*?<\/item>/gi) || [];
+  return items.map((item) => {
+    const title = xmlTag(item, "title");
+    const description = xmlTag(item, "description");
+    const category = [...item.matchAll(/<category[^>]*>([\s\S]*?)<\/category>/gi)].map((match) => decodeXml(match[1])).join(" ");
+    return stripTags(`${title} ${description} ${category}`).trim();
+  }).filter(Boolean);
+}
+
+function xmlTag(text, tag) {
+  const match = text.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return match ? decodeXml(match[1]) : "";
+}
+
+function stripTags(text) {
+  return decodeXml(String(text).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^>]*>/g, " "));
+}
+
+function decodeXml(text) {
+  return String(text)
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'");
+}
+
+function matchMentionSymbols(texts) {
+  const haystack = ` ${texts.join(" ").toLowerCase().replace(/\s+/g, " ")} `;
+  const matched = [];
+  for (const target of mentionTargets) {
+    if (target.terms.some((term) => haystack.includes(term.toLowerCase()))) {
+      matched.push(target.symbol);
+    }
+  }
+  return unique(matched).filter((symbol) => equitySymbols.includes(symbol) || radarSymbols.includes(symbol));
+}
+
+function mentionScanError(error) {
+  latestMentionScan = {
+    ...emptyMentionScan(error.message),
+    updatedAt: new Date().toISOString(),
+    error: error.message,
+  };
+  return latestMentionScan;
+}
+
+function emptyMentionScan(error = null) {
+  return {
+    schema: "stonks.mention_scan.v1",
+    updatedAt: null,
+    ok: false,
+    sources: mentionSources.map((source) => ({ id: source.id, label: source.label, ok: false, count: 0, error })),
+    mentionedSymbols: [],
+    scannedItems: 0,
+    refreshMs: mentionRefreshMs,
+    error,
+  };
 }
 
 async function fetchCrypto() {
@@ -203,17 +494,23 @@ function buildState(snapshot) {
   const rows = [
     pane("sources", "Source Status", [
       metricNode("updated", "updated", ageLabel(snapshot.updatedAt), "ok"),
-      metricNode("equities-source", "equities", snapshot.sources.equities.ok ? "ok" : "error", snapshot.sources.equities.ok ? "ok" : "warn"),
+      metricNode("equities-source", "Finnhub", snapshot.sources.equities.ok ? "ok" : "error", snapshot.sources.equities.ok ? "ok" : "warn"),
       metricNode("crypto-source", "crypto", snapshot.sources.crypto.ok ? "ok" : "error", snapshot.sources.crypto.ok ? "ok" : "warn"),
       metricNode("duration", "poll", `${snapshot.durationMs}ms`, snapshot.durationMs > 7000 ? "warn" : "ok"),
       snapshot.sources.equities.error ? textNode("equities-error", `equities error: ${errorSummary(snapshot.sources.equities.error)}`) : null,
       snapshot.sources.crypto.error ? textNode("crypto-error", `crypto error: ${errorSummary(snapshot.sources.crypto.error)}`) : null,
     ]),
     pane("pull-volume", "Pull Volume", [
-      metricNode("equity-rows", "Stooq rows", `${snapshot.equities.length}/${equitySymbols.length}`, snapshot.equities.length ? "ok" : "warn"),
+      metricNode("equity-rows", "Finnhub cache", `${snapshot.equities.length}/${equitySymbols.length}`, snapshot.equities.length ? "ok" : "warn"),
+      metricNode("equity-sample", "quote calls", `${snapshot.sources.equities.callsThisRefresh}/${snapshot.sources.equities.budgetPerMinute}/min`, snapshot.sources.equities.tokenConfigured ? "ok" : "warn"),
       metricNode("crypto-rows", "CoinGecko rows", `${snapshot.crypto.length}/${cryptoIds.length}`, snapshot.crypto.length ? "ok" : "warn"),
       metricNode("radar-count", "radar names", String(snapshot.radar.length), "ok"),
-      metricNode("private-watch-count", "private watch", String(snapshot.privateWatch.length), "ok"),
+      metricNode("mention-count", "mentions", String(snapshot.mentions.mentionedSymbols.length), snapshot.mentions.ok ? "ok" : "warn"),
+    ]),
+    pane("mention-radar", "Mention Radar", [
+      ...snapshot.mentions.sources.map((source) => metricNode(`mention-${source.id}`, source.label, source.ok ? `${source.count}` : "error", source.ok ? "ok" : "warn")),
+      textNode("mention-symbols", `mentioned: ${snapshot.mentions.mentionedSymbols.map(toFinnhubSymbol).join(", ") || "none"}`),
+      snapshot.mentions.error ? textNode("mention-error", `radar error: ${errorSummary(snapshot.mentions.error)}`) : null,
     ]),
     pane("request-health", "Request Health", [
       metricNode("request-total", "recent", String(recent.length), "ok"),
@@ -304,11 +601,23 @@ function pendingSnapshot(error) {
     durationMs: 0,
     error,
     sources: {
-      equities: { name: "Stooq", ok: false, error },
+      equities: {
+        name: "Finnhub",
+        ok: false,
+        error,
+        configured: equitySymbols.length,
+        cached: 0,
+        sampled: [],
+        callsThisRefresh: 0,
+        budgetPerMinute: equityCallsPerMinute,
+        tokenConfigured: Boolean(finnhubToken),
+        unsupported: [...unsupportedEquitySymbols],
+      },
       crypto: { name: "CoinGecko", ok: false, error },
     },
     equities: [],
     crypto: [],
+    mentions: emptyMentionScan(error),
     privateWatch: privateWatch.map(privateWatchItem),
     radar: [],
     recentRequests: [...recentRequests],
@@ -360,8 +669,17 @@ function handleHttp(req, res) {
       crypto: cryptoIds,
       privateWatch,
       radar: radarSymbols,
+      finnhub: {
+        tokenConfigured: Boolean(finnhubToken),
+        tokenFileConfigured: Boolean(finnhubTokenFile),
+        equityCallsPerMinute,
+        mentionRefreshMs,
+        cachedEquities: equityCache.size,
+        unsupportedEquities: [...unsupportedEquitySymbols],
+      },
       recentRequests: [...recentRequests],
       sources: latestSnapshot.sources,
+      mentions: latestSnapshot.mentions,
     });
     return;
   }
@@ -459,7 +777,9 @@ function getText(url) {
       res.on("end", () => {
         logRequest({ direction: "outbound", kind: "fetch-complete", method: "GET", url: redactedUrl(url), statusCode: res.statusCode, durationMs: Date.now() - startedAt });
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          reject(new Error(`${url} returned ${res.statusCode}`));
+          const error = new Error(`${redactedUrl(url)} returned ${res.statusCode}`);
+          error.statusCode = res.statusCode;
+          reject(error);
           return;
         }
         resolve(data);
@@ -467,7 +787,7 @@ function getText(url) {
     });
     req.on("timeout", () => {
       logRequest({ direction: "outbound", kind: "fetch-timeout", method: "GET", url: redactedUrl(url), durationMs: Date.now() - startedAt, ok: false });
-      req.destroy(new Error(`${url} timed out`));
+      req.destroy(new Error(`${redactedUrl(url)} timed out`));
     });
     req.on("error", (error) => {
       logRequest({ direction: "outbound", kind: "fetch-error", method: "GET", url: redactedUrl(url), durationMs: Date.now() - startedAt, ok: false, error: error.message });
@@ -517,12 +837,23 @@ function redactedUrl(value) {
   }
 }
 
-function radarSymbolsFor(date) {
+function readSecretFile(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return "";
+    return fs.readFileSync(filePath, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function radarSymbolsFor(date, mentionedSymbols = []) {
   if (radarSymbols.length === 0) return [];
+  const configured = new Set(radarSymbols);
+  const mentionedRadar = mentionedSymbols.filter((symbol) => configured.has(symbol));
   const seed = Math.floor(date.getTime() / 60000);
-  return [...radarSymbols]
+  return unique([...mentionedRadar, ...[...radarSymbols]
     .sort((a, b) => hashString(`${a}:${seed}`) - hashString(`${b}:${seed}`))
-    .slice(0, Math.min(6, radarSymbols.length));
+  ]).slice(0, Math.min(6, radarSymbols.length));
 }
 
 function hashString(value) {
@@ -534,18 +865,19 @@ function hashString(value) {
   return hash >>> 0;
 }
 
-function csvLine(line, header) {
-  const values = line.split(",");
-  const row = {};
-  for (let i = 0; i < header.length; i++) {
-    row[header[i]] = values[i] || "";
-  }
-  return row;
-}
-
 function numberOrNull(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.max(min, Math.min(max, number));
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 function formatNumber(value) {

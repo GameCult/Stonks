@@ -1,6 +1,7 @@
 param(
   [int] $Port = 8802,
   [string] $StateDir = "E:\Projects\Stonks\scratch\stonks",
+  [string] $FinnhubTokenFile = "E:\Projects\Stonks\finnhub-oauth.txt",
   [switch] $Foreground
 )
 
@@ -26,10 +27,12 @@ if (Test-Path $pidPath) {
 }
 
 $env:NODE_PATH = "E:\Projects\CultLib\packages"
+$env:STONKS_FINNHUB_TOKEN_FILE = $FinnhubTokenFile
 $args = @(
   $scriptPath,
   "--port", "$Port",
-  "--stateDir", $StateDir
+  "--stateDir", $StateDir,
+  "--finnhubTokenFile", $FinnhubTokenFile
 )
 
 if ($Foreground) {
