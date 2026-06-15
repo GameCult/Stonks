@@ -164,10 +164,7 @@ const eveSurfaceDocument = defineDocumentType({
   schema: passThroughSchema,
   global: true,
 });
-const cultCache = CultCache.builder()
-  .withRegistry(defineDocumentRegistry(requestEventDocument, marketSnapshotDocument, eveSurfaceDocument))
-  .withGenericStore(new SingleFileMessagePackBackingStore(cultCachePath))
-  .build();
+let cultCache = createCultCache();
 
 let version = 0;
 let latestSnapshot = pendingSnapshot("Stonks starting");
@@ -179,7 +176,7 @@ main().catch((error) => {
 });
 
 async function main() {
-  await cultCache.pullAllBackingStores();
+  await pullCultCacheOrQuarantine();
   loadRecentRequestsFromCultCache();
   const server = http.createServer(handleHttp);
   server.on("upgrade", handleUpgrade);
@@ -191,6 +188,30 @@ async function main() {
   setInterval(() => {
     refresh().catch((error) => console.error("refresh failed:", error));
   }, intervalMs);
+}
+
+function createCultCache() {
+  return CultCache.builder()
+    .withRegistry(defineDocumentRegistry(requestEventDocument, marketSnapshotDocument, eveSurfaceDocument))
+    .withGenericStore(new SingleFileMessagePackBackingStore(cultCachePath))
+    .build();
+}
+
+async function pullCultCacheOrQuarantine() {
+  try {
+    await cultCache.pullAllBackingStores();
+  } catch (error) {
+    if (!fs.existsSync(cultCachePath)) {
+      throw error;
+    }
+
+    const corruptPath = `${cultCachePath}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    fs.renameSync(cultCachePath, corruptPath);
+    console.error(`Stonks CultCache state was unreadable and has been quarantined: ${corruptPath}`);
+    console.error(`Stonks CultCache read error: ${error.message}`);
+    cultCache = createCultCache();
+    await cultCache.pullAllBackingStores();
+  }
 }
 
 async function refresh() {
