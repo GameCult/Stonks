@@ -10,7 +10,8 @@ Odin can aggregate it and renderers can lower it without owning market state.
 ```text
 Public market endpoints
   -> Stonks poller
-  -> request-event, market-snapshot, and Eve-surface CultCache documents
+  -> request-event, market-snapshot, provider-advertisement,
+     command-boundary, transport-profile, and Eve-surface CultCache documents
   -> normalized market snapshot with provenance, freshness, and request history
   -> provider-owned Eve/CultUI surface
   -> /eve/deck WebSocket + /eve/deck/providers manifest
@@ -35,6 +36,9 @@ Stonks refresh completion
 - The `/health`, `/market/state`, and `/eve/deck` HTTP/WebSocket surfaces are
   compatibility projections. Idunn liveness is daemon-published RUDP health,
   not an Odin-owned curl probe.
+- Odin should ingest Stonks provider advertisement, command boundary, transport
+  profile, market snapshot, and Eve surface from `scratch/stonks/stonks-state.cc`.
+  The HTTP/WebSocket endpoints are lowerings over that store.
 - Refreshes are serialized because each refresh publishes daemon health after
   updating the market snapshot.
 

@@ -17,6 +17,9 @@ renderers such as Nightwing.
   `stonks` and contract `stonks.cultnet-rudp-market-health`.
 - Snapshot: `http://127.0.0.1:8802/market/state`
 - CultCache state: `scratch/stonks/stonks-state.cc`
+- Provider records: the same CultCache store now contains
+  `gamecult.eve.provider_advertisement.v1`, `stonks.command_boundary.v1`, and
+  `stonks.transport_profile.v1` beside the market snapshot and Eve surface.
 - Request events: persisted as keyed `stonks.request_event.v1` CultCache
   documents and summarized in the Eve dashboard. Raw request ledgers are not
   shown as dashboard truth.
@@ -75,5 +78,7 @@ Idunn health publishing is enabled by the launcher with:
 --idunn-health-contract stonks.cultnet-rudp-market-health
 ```
 
-The `/health` endpoint remains a compatibility/status projection. It is not the
-owner of Stonks daemon liveness once Idunn has fresh RUDP health.
+The `/health`, `/market/state`, and `/eve/deck` endpoints remain
+compatibility/status or renderer projections. They are not the owners of Stonks
+daemon liveness or provider truth once Idunn has fresh RUDP health and Odin can
+read the typed provider records from `scratch/stonks/stonks-state.cc`.

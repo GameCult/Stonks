@@ -166,6 +166,30 @@ const marketSnapshotDocument = defineDocumentType({
   schema: passThroughSchema,
   global: true,
 });
+const providerAdvertisementDocument = defineDocumentType({
+  type: "provider-advertisement",
+  schemaId: "gamecult.eve.provider_advertisement.v1",
+  schemaName: "gamecult.eve.provider_advertisement",
+  schemaVersion: "v1",
+  schema: passThroughSchema,
+  name: (value) => value?.providerId || providerId,
+});
+const commandBoundaryDocument = defineDocumentType({
+  type: "command-boundary",
+  schemaId: "stonks.command_boundary.v1",
+  schemaName: "stonks.command_boundary",
+  schemaVersion: "v1",
+  schema: passThroughSchema,
+  name: (value) => value?.boundaryId || value?.daemonId || "stonks",
+});
+const transportProfileDocument = defineDocumentType({
+  type: "transport-profile",
+  schemaId: "stonks.transport_profile.v1",
+  schemaName: "stonks.transport_profile",
+  schemaVersion: "v1",
+  schema: passThroughSchema,
+  name: (value) => value?.profileId || value?.daemonId || "stonks",
+});
 const eveSurfaceDocument = defineDocumentType({
   type: "eve-surface",
   schemaId: "gamecult.eve.surface_state.v1",
@@ -208,7 +232,14 @@ function scheduleRefresh() {
 
 function createCultCache() {
   return CultCache.builder()
-    .withRegistry(defineDocumentRegistry(requestEventDocument, marketSnapshotDocument, eveSurfaceDocument))
+    .withRegistry(defineDocumentRegistry(
+      requestEventDocument,
+      marketSnapshotDocument,
+      providerAdvertisementDocument,
+      commandBoundaryDocument,
+      transportProfileDocument,
+      eveSurfaceDocument,
+    ))
     .withGenericStore(new SingleFileMessagePackBackingStore(cultCachePath))
     .build();
 }
@@ -722,6 +753,9 @@ function persistSnapshot(snapshot, state) {
   trackCultCacheWrite("persist snapshot", async () => {
     await cultCache.putGlobal(marketSnapshotDocument, snapshot);
     await cultCache.putGlobal(eveSurfaceDocument, state);
+    await cultCache.put(providerAdvertisementDocument, providerId, providerAdvertisement(state));
+    await cultCache.put(commandBoundaryDocument, "stonks", commandBoundary(snapshot));
+    await cultCache.put(transportProfileDocument, "stonks", transportProfile(snapshot));
   });
 }
 
@@ -758,16 +792,7 @@ function handleHttp(req, res) {
 
   if (url.pathname === "/eve/deck/providers") {
     sendJson(res, 200, {
-      providers: [{
-        id: providerId,
-        title: "Stonks",
-        description: "Market data pulse provider for the GameCult CultMesh Verse.",
-        version: String(currentState.version),
-        endpoint: "/eve/deck",
-        capabilities: ["market-data", "equities", "crypto", "cultui-surface"],
-        usesCultMesh: true,
-        transport: "CultCache .cc + Eve WebSocket projection",
-      }],
+      providers: [providerAdvertisement(currentState)],
     });
     return;
   }
@@ -810,6 +835,101 @@ function handleUpgrade(req, socket) {
   });
   socket.on("close", () => clients.delete(socket));
   socket.on("error", () => clients.delete(socket));
+}
+
+function providerAdvertisement(state) {
+  const updatedAt = state?.updatedAt || new Date().toISOString();
+  return {
+    schema: "gamecult.eve.provider_advertisement.v1",
+    providerId,
+    daemonId: "stonks",
+    title: "Stonks",
+    description: "Market data pulse provider for the GameCult CultMesh Verse.",
+    version: String(state?.version || version || 0),
+    mode: "daemon-live",
+    status: latestSnapshot?.sources?.equities?.ok || latestSnapshot?.sources?.crypto?.ok ? "active" : "degraded",
+    updatedAt,
+    canonicalService: "asgard.stonks",
+    locatedService: "asgard.starfire.stonks",
+    cultMeshAddress: "asgard.starfire.stonks/eve/operator",
+    endpoint: "/eve/deck",
+    capabilities: ["market-data", "equities", "crypto", "cultui-surface"],
+    usesCultMesh: true,
+    transport: "CultCache .cc + Eve WebSocket projection",
+    endpoints: [
+      { transport: "cultmesh-store", address: relativeCultCachePath() },
+      { transport: "compatibility-http", address: `http://${host}:${port}` },
+      { transport: "compatibility-eve-deck", address: `ws://${host}:${port}/eve/deck` },
+    ],
+    routes: [
+      { transport: "cultmesh-store", address: relativeCultCachePath() },
+      { transport: "compatibility-http", address: `http://${host}:${port}/market/state` },
+      { transport: "compatibility-eve-deck", address: `ws://${host}:${port}/eve/deck` },
+    ],
+    health: {
+      contract: idunnHealthContract,
+      endpoint: idunnRudpHealthPublisher ? "cultnet.transport.rudp.v0:idunn-health" : `http://${host}:${port}/health`,
+      transport: idunnRudpHealthPublisher ? "cultnet.transport.rudp.v0" : "compatibility-http",
+      publicationSource: idunnRudpHealthPublisher ? "daemon-published" : "compatibility-http",
+    },
+  };
+}
+
+function commandBoundary(snapshot) {
+  return {
+    schema: "stonks.command_boundary.v1",
+    boundaryId: "stonks",
+    daemonId: "stonks",
+    providerId,
+    updatedAt: snapshot?.updatedAt || new Date().toISOString(),
+    owner: "Stonks daemon",
+    lifecycleAuthority: "idunn.local-command",
+    healthPublication: {
+      contract: idunnHealthContract,
+      transport: "cultnet.transport.rudp.v0",
+      publicationSource: "daemon-published",
+      stateOwner: "Stonks daemon",
+    },
+    commands: [],
+    forbiddenWriters: [
+      "Odin and renderers may lower Stonks surfaces but do not mutate market snapshots.",
+      "HTTP/WebSocket clients consume projections and do not own market data or daemon liveness.",
+    ],
+    compatibility: {
+      http: `http://${host}:${port}`,
+      websocket: `ws://${host}:${port}/eve/deck`,
+      status: "debug-and-renderer-lowering-only",
+      cutLine: "Keep HTTP/WebSocket as lowerings over Stonks CultCache records; daemon truth is RUDP health plus typed provider records in the Stonks store.",
+    },
+  };
+}
+
+function transportProfile(snapshot) {
+  return {
+    schema: "stonks.transport_profile.v1",
+    profileId: "stonks",
+    daemonId: "stonks",
+    providerId,
+    updatedAt: snapshot?.updatedAt || new Date().toISOString(),
+    targetTransport: "cultnet.transport.rudp.v0",
+    currentTransport: idunnRudpHealthPublisher
+      ? "rudp-health-and-cultcache-store + compatibility-http-websocket-lowerings"
+      : "cultcache-store + compatibility-http-websocket",
+    healthTransport: idunnRudpHealthPublisher ? "cultnet.transport.rudp.v0" : "compatibility-http",
+    stateTransport: "cultcache-store",
+    rendererTransport: "compatibility-eve-deck",
+    compatibility: {
+      http: `http://${host}:${port}`,
+      websocket: `ws://${host}:${port}/eve/deck`,
+      endpointsAreLowerings: true,
+    },
+    cutLine: "Stonks health and provider state are daemon-owned typed records; HTTP and WebSocket remain renderer/debug lowerings.",
+  };
+}
+
+function relativeCultCachePath() {
+  const relative = path.relative(repoRoot, cultCachePath).replace(/\\/g, "/");
+  return relative && !relative.startsWith("..") ? relative : cultCachePath;
 }
 
 function broadcast(state) {
