@@ -9,7 +9,8 @@
     "start": "node src/stonks-daemon.cjs"
   },
   "dependencies": {
-    "cultcache-ts": "file:../CultLib/packages/cultcache-ts"
+    "cultcache-ts": "file:../CultLib/packages/cultcache-ts",
+    "cultnet-ts": "file:../CultLib/packages/cultnet-ts"
   },
   "engines": {
     "node": ">=20"

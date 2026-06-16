@@ -16,6 +16,11 @@ Public market endpoints
   -> /eve/deck WebSocket + /eve/deck/providers manifest
   -> Odin interface ingestion
   -> Eve / Nightwing / agent projection
+
+Stonks refresh completion
+  -> idunn.daemon_health raw CultNet document
+  -> cultnet.transport.rudp.v0 schema channel
+  -> Idunn keepalive store and decision cycle
 ```
 
 ## Invariants
@@ -27,6 +32,11 @@ Public market endpoints
 - Odin owns discovery and aggregation, not market truth.
 - Renderers lower the Stonks surface only.
 - Stonks does not trade, advise, custody funds, or infer portfolio intent.
+- The `/health`, `/market/state`, and `/eve/deck` HTTP/WebSocket surfaces are
+  compatibility projections. Idunn liveness is daemon-published RUDP health,
+  not an Odin-owned curl probe.
+- Refreshes are serialized because each refresh publishes daemon health after
+  updating the market snapshot.
 
 ## Future Cut
 

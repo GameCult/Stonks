@@ -2,6 +2,9 @@ param(
   [int] $Port = 8802,
   [string] $StateDir = "E:\Projects\Stonks\scratch\stonks",
   [string] $FinnhubTokenFile = "E:\Projects\Stonks\finnhub-oauth.txt",
+  [string] $IdunnRudpHealth = "127.0.0.1:17870",
+  [string] $IdunnDaemon = "stonks",
+  [string] $IdunnHealthContract = "stonks.cultnet-rudp-market-health",
   [switch] $Foreground
 )
 
@@ -32,7 +35,10 @@ $args = @(
   $scriptPath,
   "--port", "$Port",
   "--stateDir", $StateDir,
-  "--finnhubTokenFile", $FinnhubTokenFile
+  "--finnhubTokenFile", $FinnhubTokenFile,
+  "--idunn-rudp-health", $IdunnRudpHealth,
+  "--idunn-daemon", $IdunnDaemon,
+  "--idunn-health-contract", $IdunnHealthContract
 )
 
 if ($Foreground) {

@@ -12,6 +12,9 @@ renderers such as Nightwing.
 - Eve deck: `ws://127.0.0.1:8802/eve/deck`
 - Provider manifest: `http://127.0.0.1:8802/eve/deck/providers`
 - Health: `http://127.0.0.1:8802/health`
+- Idunn daemon health: `idunn.daemon_health` over
+  `cultnet.transport.rudp.v0`, defaulting to `127.0.0.1:17870` with daemon id
+  `stonks` and contract `stonks.cultnet-rudp-market-health`.
 - Snapshot: `http://127.0.0.1:8802/market/state`
 - CultCache state: `scratch/stonks/stonks-state.cc`
 - Request events: persisted as keyed `stonks.request_event.v1` CultCache
@@ -63,3 +66,14 @@ At the default 15 second poll interval and 48 calls/minute budget, Stonks pulls
 up to 12 Finnhub equity quotes per refresh. It prioritizes recently mentioned
 watch symbols, uncached symbols, and then a round-robin pass across the
 configured watchlist.
+
+Idunn health publishing is enabled by the launcher with:
+
+```powershell
+--idunn-rudp-health 127.0.0.1:17870
+--idunn-daemon stonks
+--idunn-health-contract stonks.cultnet-rudp-market-health
+```
+
+The `/health` endpoint remains a compatibility/status projection. It is not the
+owner of Stonks daemon liveness once Idunn has fresh RUDP health.

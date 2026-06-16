@@ -12,6 +12,7 @@ const {
   defineDocumentRegistry,
   defineDocumentType,
 } = require("cultcache-ts");
+const { createIdunnRudpHealthPublisher, publishIdunnRudpHealth } = require("./idunn-rudp.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
 const args = parseArgs(process.argv.slice(2));
@@ -24,10 +25,19 @@ const finnhubTokenFile = args.finnhubTokenFile || process.env.STONKS_FINNHUB_TOK
 const finnhubToken = String(args.finnhubToken || process.env.FINNHUB_API_KEY || process.env.STONKS_FINNHUB_TOKEN || readSecretFile(finnhubTokenFile)).trim();
 const equityCallsPerMinute = clampNumber(args.equityCallsPerMinute || process.env.STONKS_EQUITY_CALLS_PER_MINUTE || 48, 1, 60);
 const mentionRefreshMs = clampNumber(args.mentionRefreshMs || process.env.STONKS_MENTION_REFRESH_MS || 600000, 60000, 3600000);
+const idunnRudpHealth = args["idunn-rudp-health"] || process.env.STONKS_IDUNN_RUDP_HEALTH;
+const idunnDaemon = args["idunn-daemon"] || process.env.STONKS_IDUNN_DAEMON || "stonks";
+const idunnHealthContract = args["idunn-health-contract"] || process.env.STONKS_IDUNN_HEALTH_CONTRACT || "stonks.cultnet-rudp-market-health";
+const idunnRudpHealthPublisher = createIdunnRudpHealthPublisher(idunnRudpHealth ? {
+  endpoint: idunnRudpHealth,
+  daemonId: idunnDaemon,
+  healthContract: idunnHealthContract,
+} : null);
 const providerId = "stonks.market";
 const clients = new Set();
 const recentRequests = [];
 const pendingCultCacheWrites = new Set();
+let lastIdunnRudpHealthPublishedAt = null;
 
 const equitySymbols = String(args.equities || process.env.STONKS_EQUITIES || "ubi.fr,ea.us,ttwo.us,rblx.us,ntdoy.us,sony.us,msft.us,nvda.us,amd.us,googl.us,meta.us,aapl.us,tsla.us,tsm.us,asml.us,crsr.us,logi.us,se.us")
   .split(",")
@@ -185,8 +195,14 @@ async function main() {
   });
 
   await refresh();
-  setInterval(() => {
-    refresh().catch((error) => console.error("refresh failed:", error));
+  scheduleRefresh();
+}
+
+function scheduleRefresh() {
+  setTimeout(() => {
+    refresh()
+      .catch((error) => console.error("refresh failed:", error))
+      .finally(scheduleRefresh);
   }, intervalMs);
 }
 
@@ -215,10 +231,45 @@ async function pullCultCacheOrQuarantine() {
 }
 
 async function refresh() {
-  latestSnapshot = await marketSnapshot();
-  currentState = buildState(latestSnapshot);
-  persistSnapshot(latestSnapshot, currentState);
-  broadcast(currentState);
+  try {
+    latestSnapshot = await marketSnapshot();
+    currentState = buildState(latestSnapshot);
+    persistSnapshot(latestSnapshot, currentState);
+    broadcast(currentState);
+    await publishStonksHealth("active", stonksHealthDetail(latestSnapshot));
+  } catch (error) {
+    await publishStonksHealth("failed", `Stonks refresh failed: ${error.message}`);
+    throw error;
+  }
+}
+
+async function publishStonksHealth(state, detail) {
+  if (!idunnRudpHealthPublisher) return;
+  try {
+    await publishIdunnRudpHealth(idunnRudpHealthPublisher, {
+      state,
+      detail,
+      observedAt: new Date().toISOString(),
+    });
+    lastIdunnRudpHealthPublishedAt = Date.now();
+  } catch (error) {
+    const lastPublishedAgeMs = lastIdunnRudpHealthPublishedAt === null
+      ? Number.POSITIVE_INFINITY
+      : Date.now() - lastIdunnRudpHealthPublishedAt;
+    if (lastPublishedAgeMs > Math.max(60_000, intervalMs * 4)) {
+      console.error("Idunn RUDP health publish failed:", error.message);
+    }
+  }
+}
+
+function stonksHealthDetail(snapshot) {
+  return [
+    `Stonks refreshed market snapshot in ${snapshot.durationMs}ms`,
+    `equities=${snapshot.equities.length}/${equitySymbols.length}`,
+    `crypto=${snapshot.crypto.length}/${cryptoIds.length}`,
+    `finnhub=${snapshot.sources.equities.ok ? "ok" : "degraded"}`,
+    `coingecko=${snapshot.sources.crypto.ok ? "ok" : "degraded"}`,
+  ].join("; ");
 }
 
 async function marketSnapshot() {
