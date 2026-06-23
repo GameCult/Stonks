@@ -16,7 +16,7 @@ trading bot, portfolio manager, investment adviser, or renderer decoration.
   CultCache document, `/eve/deck`, `/eve/deck/providers`, and `/health`.
 - Derived state: Odin, Nightwing, Eve clients, dashboards, and agents consume
   Stonks projections; they do not own market truth or scrape markets directly.
-- Forbidden writers: renderers, Odin, VoidBot rumination, and repo Faces must
+- Forbidden writers: renderers, Odin, VoidBot rumination, and repo Personas must
   not invent market state. They consume the Stonks provider surface.
 - Shared paths: HTTP status, Eve surface, and future CultMesh documents are all
   derived from the same normalized market snapshot and request-event state.
