@@ -5,6 +5,7 @@ param(
   [string] $IdunnRudpHealth = "127.0.0.1:17870",
   [string] $IdunnDaemon = "stonks",
   [string] $IdunnHealthContract = "stonks.cultnet-rudp-market-health",
+  [string] $OdinCultMeshRudp = "127.0.0.1:17871",
   [switch] $Foreground
 )
 
@@ -41,6 +42,10 @@ $args = @(
   "--idunn-health-contract", $IdunnHealthContract
 )
 
+if (-not [string]::IsNullOrWhiteSpace($OdinCultMeshRudp)) {
+  $args += @("--odin-cultmesh-rudp", $OdinCultMeshRudp)
+}
+
 if ($Foreground) {
   & node @args
   exit $LASTEXITCODE
@@ -59,3 +64,4 @@ if ($proc.HasExited) {
 Write-Host "Stonks started as PID $($proc.Id)."
 Write-Host "Health: http://127.0.0.1:$Port/health"
 Write-Host "Eve deck: ws://127.0.0.1:$Port/eve/deck"
+Write-Host "Odin CultMesh/RUDP: $OdinCultMeshRudp"

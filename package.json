@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "cultcache-ts": "file:../CultLib/packages/cultcache-ts",
+    "cultmesh-ts": "file:../CultLib/packages/cultmesh-ts",
     "cultnet-ts": "file:../CultLib/packages/cultnet-ts"
   },
   "engines": {

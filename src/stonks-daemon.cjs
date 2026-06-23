@@ -12,6 +12,8 @@ const {
   defineDocumentRegistry,
   defineDocumentType,
 } = require("cultcache-ts");
+const { CultMesh } = require("cultmesh-ts");
+const { defineCultNetDocumentBinding } = require("cultnet-ts");
 const { createIdunnRudpHealthPublisher, publishIdunnRudpHealth } = require("./idunn-rudp.cjs");
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -28,6 +30,7 @@ const mentionRefreshMs = clampNumber(args.mentionRefreshMs || process.env.STONKS
 const idunnRudpHealth = args["idunn-rudp-health"] || process.env.STONKS_IDUNN_RUDP_HEALTH;
 const idunnDaemon = args["idunn-daemon"] || process.env.STONKS_IDUNN_DAEMON || "stonks";
 const idunnHealthContract = args["idunn-health-contract"] || process.env.STONKS_IDUNN_HEALTH_CONTRACT || "stonks.cultnet-rudp-market-health";
+const odinCultMeshRudp = args["odin-cultmesh-rudp"] || process.env.STONKS_ODIN_CULTMESH_RUDP;
 const idunnRudpHealthPublisher = createIdunnRudpHealthPublisher(idunnRudpHealth ? {
   endpoint: idunnRudpHealth,
   daemonId: idunnDaemon,
@@ -219,6 +222,7 @@ async function main() {
   });
 
   await refresh();
+  await publishOdinStartupRespect();
   scheduleRefresh();
 }
 
@@ -290,6 +294,28 @@ async function publishStonksHealth(state, detail) {
     if (lastPublishedAgeMs > Math.max(60_000, intervalMs * 4)) {
       console.error("Idunn RUDP health publish failed:", error.message);
     }
+  }
+}
+
+async function publishOdinStartupRespect() {
+  if (!odinCultMeshRudp) return;
+  try {
+    const advertisement = providerAdvertisement(currentState);
+    await CultMesh.publishRudpDocumentOnce(
+      idunnDaemon,
+      0x0d1d0002,
+      normalizeRudpEndpoint(odinCultMeshRudp),
+      defineCultNetDocumentBinding({ definition: providerAdvertisementDocument }),
+      advertisement.providerId,
+      advertisement,
+      {
+        sourceRole: "stonks.provider",
+        tags: ["startup-respect", "odin-verse-discovery"],
+      },
+    );
+    console.log(`Stonks Odin startup respect published to ${odinCultMeshRudp}`);
+  } catch (error) {
+    console.error("Stonks Odin startup respect failed:", error.message);
   }
 }
 
@@ -1036,6 +1062,14 @@ function readSecretFile(filePath) {
   } catch {
     return "";
   }
+}
+
+function normalizeRudpEndpoint(endpoint) {
+  const text = String(endpoint || "").trim();
+  if (!text) {
+    throw new Error("Odin CultMesh/RUDP endpoint must be non-empty.");
+  }
+  return text.toLowerCase().startsWith("rudp://") ? text : `rudp://${text}`;
 }
 
 function radarSymbolsFor(date, mentionedSymbols = []) {
