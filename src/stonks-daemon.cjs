@@ -39,7 +39,6 @@ const idunnRudpHealthPublisher = createIdunnRudpHealthPublisher(idunnRudpHealth 
 const providerId = "stonks.market";
 const clients = new Set();
 const recentRequests = [];
-const pendingCultCacheWrites = new Set();
 let lastIdunnRudpHealthPublishedAt = null;
 
 const equitySymbols = String(args.equities || process.env.STONKS_EQUITIES || "ubi.fr,ea.us,ttwo.us,rblx.us,ntdoy.us,sony.us,msft.us,nvda.us,amd.us,googl.us,meta.us,aapl.us,tsla.us,tsm.us,asml.us,crsr.us,logi.us,se.us")
@@ -1038,12 +1037,9 @@ function loadRecentRequestsFromCultCache() {
 }
 
 function trackCultCacheWrite(label, operation) {
-  const write = operation().catch((error) => {
+  operation().catch((error) => {
     console.error(`${label} failed:`, error.message);
-  }).finally(() => {
-    pendingCultCacheWrites.delete(write);
   });
-  pendingCultCacheWrites.add(write);
 }
 
 function redactedUrl(value) {
