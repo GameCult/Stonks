@@ -153,7 +153,7 @@ const requestEventDocument = defineDocumentType({
   type: "request-event",
   schemaId: "stonks.request_event.v1",
   schemaName: "stonks.request_event",
-  schemaVersion: "v1",
+  schemaVersion: "stonks.request_event.v1",
   schema: passThroughSchema,
   indexes: {
     direction: "direction",
@@ -164,7 +164,7 @@ const marketSnapshotDocument = defineDocumentType({
   type: "market-snapshot",
   schemaId: "stonks.market_snapshot.v1",
   schemaName: "stonks.market_snapshot",
-  schemaVersion: "v1",
+  schemaVersion: "stonks.market_snapshot.v1",
   schema: passThroughSchema,
   global: true,
 });
@@ -172,7 +172,7 @@ const providerAdvertisementDocument = defineDocumentType({
   type: "provider-advertisement",
   schemaId: "gamecult.eve.provider_advertisement.v1",
   schemaName: "gamecult.eve.provider_advertisement",
-  schemaVersion: "v1",
+  schemaVersion: "gamecult.eve.provider_advertisement.v1",
   schema: passThroughSchema,
   name: (value) => value?.providerId || providerId,
 });
@@ -180,7 +180,7 @@ const commandBoundaryDocument = defineDocumentType({
   type: "command-boundary",
   schemaId: "stonks.command_boundary.v1",
   schemaName: "stonks.command_boundary",
-  schemaVersion: "v1",
+  schemaVersion: "stonks.command_boundary.v1",
   schema: passThroughSchema,
   name: (value) => value?.boundaryId || value?.daemonId || "stonks",
 });
@@ -188,7 +188,7 @@ const transportProfileDocument = defineDocumentType({
   type: "transport-profile",
   schemaId: "stonks.transport_profile.v1",
   schemaName: "stonks.transport_profile",
-  schemaVersion: "v1",
+  schemaVersion: "stonks.transport_profile.v1",
   schema: passThroughSchema,
   name: (value) => value?.profileId || value?.daemonId || "stonks",
 });
@@ -196,7 +196,7 @@ const eveSurfaceDocument = defineDocumentType({
   type: "eve-surface",
   schemaId: "gamecult.eve.surface_state.v1",
   schemaName: "gamecult.eve.surface_state",
-  schemaVersion: "v1",
+  schemaVersion: "gamecult.eve.surface_state.v1",
   schema: passThroughSchema,
   global: true,
 });
