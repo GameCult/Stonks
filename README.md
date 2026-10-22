@@ -6,6 +6,14 @@ It polls public equity/ETF and crypto endpoints, normalizes the result into
 CultCache state, and exposes a provider-owned Eve/CultUI surface for Odin and
 renderers such as Nightwing.
 
+**Valuable here:** a small, complete example of a provider-owned GameCult daemon. `src/stonks-daemon.cjs` polls public market endpoints, normalizes them into typed CultCache documents with provenance and freshness (`scratch/stonks/stonks-state.cc`), and publishes its own Eve/CultUI surface for Odin to aggregate. `src/idunn-rudp.cjs` is the Idunn daemon-health publisher over CultNet RUDP.
+
+**Problem it solves:** gives operators and agents ambient market context (gaming and tech names, plus a few crypto assets) through the Verse, without any renderer or dashboard owning market state.
+
+**Entry points:** `src/stonks-daemon.cjs`; `docs/architecture.md` (mechanism and authority); `AGENTS.md` (authority map); `npm run check` and `npm run start` (Node 20 or newer; the `cultcache-ts`, `cultmesh-ts` and `cultnet-ts` dependencies resolve to a sibling `CultLib` checkout, `../CultLib/packages/*`).
+
+**Live versus planned:** live is public-endpoint polling (Finnhub equities and ETFs, CoinGecko crypto, mention feeds that only steer sampling order), the Eve surface and provider records, and Idunn health. Planned: replacing public polling with a typed CultMesh market feed (`docs/architecture.md`, Future Cut), and real data for private watch names such as SpaceX, xAI/X, Neuralink and Boring, which need provider-owned feeds first. It is not a trading bot and gives no financial advice.
+
 ## Current Body
 
 - Provider id: `stonks.market`
@@ -35,8 +43,10 @@ renderers such as Nightwing.
 ## Start
 
 ```powershell
-.\scripts\start-stonks.ps1
+.\scripts\start-stonks.ps1 -StateDir .\scratch\stonks -FinnhubTokenFile .\finnhub-oauth.txt
 ```
+
+The script's `-StateDir` and `-FinnhubTokenFile` defaults point at an `E:\Projects\Stonks` checkout that does not exist on current workstations, so pass both explicitly as above (or `-Foreground` to watch it run).
 
 ## Data Sources
 
